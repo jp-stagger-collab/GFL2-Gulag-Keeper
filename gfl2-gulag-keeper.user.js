@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         솦챈 굴라그 키퍼
 // @namespace    https://arca.live/
-// @version      0.4.1
+// @version      0.4.2
 // @description  Replace arca.live block/report block flows with a custom UI for one channel.
 // @match        https://arca.live/b/gilrsfrontline2exili*
 // @match        https://arca.live/reports/b/gilrsfrontline2exili/*
@@ -1276,7 +1276,7 @@
       const adminName = getCurrentAdminName();
       const nextSession = { ...session, admin_nickname: adminName };
       setStoredSession(nextSession);
-      footer.textContent = `현재 로그인: ${adminName}`;
+      footer.textContent = `처리자: ${adminName}`;
       if (isSupabaseConfigured()) {
         void supabaseRpc('gfl2_set_admin_nickname', { p_admin_nickname: adminName }).catch(() => {});
       }
@@ -1288,7 +1288,7 @@
 
       if (!isSupabaseConfigured()) {
         status.textContent = 'SB 설정 필요';
-        footer.textContent = `현재 로그인: ${getCurrentAdminName()}`;
+        footer.textContent = `처리자: ${getCurrentAdminName()}`;
         return;
       }
 
