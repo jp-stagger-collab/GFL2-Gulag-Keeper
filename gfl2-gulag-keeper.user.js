@@ -20,6 +20,7 @@
   const MANAGER_ID = 'arca-custom-block-manager-ui';
   const STYLE_ID = 'arca-custom-block-ui-style';
   const LAST_DURATION_KEY = 'arcaCustomBlockUi:lastDuration';
+  const MANAGER_COLLAPSED_KEY = 'arcaCustomBlockUi:managerCollapsed';
   const SUPABASE_SESSION_KEY = 'arcaCustomBlockUi:supabaseSession';
   const SUPABASE_ADMIN_KEY = 'arcaCustomBlockUi:supabaseAdmin';
   const BOARD_PREFIX = 'https://arca.live/b/gilrsfrontline2exili';
@@ -822,6 +823,12 @@
       try {
         if (rememberDuration) localStorage.setItem(LAST_DURATION_KEY, duration);
         const recordReason = reason || (context.getFallbackReason ? context.getFallbackReason(duration) : '');
+        const activeBlock = await findActiveBlock(context);
+        if (activeBlock) {
+          openAlreadyBlockedModal(context, activeBlock);
+          return;
+        }
+
         recordBlockLog(context, duration, recordReason);
 
         if (context.onSubmit) {
@@ -1016,6 +1023,30 @@
       p_reason: reason || '',
       p_source: PAGE_MODE,
     }, true).catch(() => {});
+  }
+
+  async function findActiveBlock(context) {
+    const session = getStoredSession();
+    if (!context.targetLabel || !session || !session.access_token || !isSupabaseConfigured()) return null;
+
+    try {
+      const rows = await supabaseRpc('gfl2_find_active_block', {
+        p_target_username: context.targetLabel,
+      });
+      return Array.isArray(rows) && rows.length ? rows[0] : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function openAlreadyBlockedModal(context, activeBlock) {
+    openManagerModal('차단 상태 확인', (body) => {
+      addText(body, '[이미 차단 상태인 유저입니다.]');
+      addText(body, `대상: ${activeBlock.target_username || context.targetLabel || ''}`);
+      if (activeBlock.blocked_post_url) addText(body, `차단 당시 URL: ${activeBlock.blocked_post_url}`);
+      if (activeBlock.expires_at) addText(body, `차단 만료 예정: ${formatDisplayTime(activeBlock.expires_at)}`);
+      if (activeBlock.block_reason) addText(body, `차단 사유: ${activeBlock.block_reason}`);
+    });
   }
 
   function recordUnblockLog(context) {
@@ -1258,7 +1289,9 @@
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'acbm-toggle';
-    toggle.textContent = '⌄';
+    const isCollapsed = localStorage.getItem(MANAGER_COLLAPSED_KEY) === '1';
+    panel.classList.toggle('collapsed', isCollapsed);
+    toggle.textContent = isCollapsed ? '⌃' : '⌄';
 
     function refreshCount() {
       const session = getStoredSession();
@@ -1329,7 +1362,9 @@
     });
     toggle.addEventListener('click', () => {
       panel.classList.toggle('collapsed');
-      toggle.textContent = panel.classList.contains('collapsed') ? '⌃' : '⌄';
+      const collapsed = panel.classList.contains('collapsed');
+      localStorage.setItem(MANAGER_COLLAPSED_KEY, collapsed ? '1' : '0');
+      toggle.textContent = collapsed ? '⌃' : '⌄';
     });
 
     body.append(title, status, rowExpiring, rowSearch, rowHistory, footer);
