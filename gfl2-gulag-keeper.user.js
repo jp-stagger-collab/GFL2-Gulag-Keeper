@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         솦챈 굴라그 키퍼
 // @namespace    https://arca.live/
-// @version      0.4.0
+// @version      0.4.1
 // @description  Replace arca.live block/report block flows with a custom UI for one channel.
 // @match        https://arca.live/b/gilrsfrontline2exili*
 // @match        https://arca.live/reports/b/gilrsfrontline2exili/*
@@ -1296,10 +1296,10 @@
       wrap.className = 'acbm-login';
       const input = document.createElement('input');
       input.type = 'password';
-      input.placeholder = '비밀번호';
+      input.placeholder = '공용 비밀번호를 입력하세요.';
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = '활성화';
+      button.textContent = '로그인하기 (Click)';
       button.addEventListener('click', () => {
         button.disabled = true;
         loginSupabase(input.value)
@@ -1311,7 +1311,7 @@
       });
       wrap.append(input, button);
       status.appendChild(wrap);
-      footer.textContent = `현재 로그인: ${getCurrentAdminName()}`;
+      footer.textContent = `처리자: ${getCurrentAdminName()}`;
     }
 
     const session = getStoredSession();
