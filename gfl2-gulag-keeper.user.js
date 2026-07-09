@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         솦챈 굴라그 키퍼
 // @namespace    https://arca.live/
-// @version      0.4.2
+// @version      0.4.3
 // @description  Replace arca.live block/report block flows with a custom UI for one channel.
 // @match        https://arca.live/b/gilrsfrontline2exili*
 // @match        https://arca.live/reports/b/gilrsfrontline2exili/*
@@ -1014,6 +1014,7 @@
 
     const durationDays = parseDurationDays(duration);
     if (!durationDays) return;
+    const adminName = getCurrentAdminName();
 
     void supabaseRpc('gfl2_record_block', {
       p_target_username: context.targetLabel || '',
@@ -1022,6 +1023,7 @@
       p_duration_days: durationDays,
       p_reason: reason || '',
       p_source: PAGE_MODE,
+      p_admin_nickname: adminName || null,
     }, true).catch(() => {});
   }
 
@@ -1052,11 +1054,13 @@
   function recordUnblockLog(context) {
     const session = getStoredSession();
     if (!session || !session.access_token || !isSupabaseConfigured()) return;
+    const adminName = getCurrentAdminName();
 
     void supabaseRpc('gfl2_record_unblock', {
       p_target_username: context.targetLabel || '',
       p_post_url: context.targetUrl || null,
       p_source: PAGE_MODE,
+      p_admin_nickname: adminName || null,
     }, true).catch(() => {});
   }
 
