@@ -1258,7 +1258,7 @@
 
     const title = document.createElement('div');
     title.className = 'acbm-title';
-    title.textContent = '솦챈 굴라그 키퍼 v0.4.2';
+    title.textContent = '솦챈 굴라그 키퍼 v0.4.3';
 
     const status = document.createElement('div');
     status.className = 'acbm-row';
