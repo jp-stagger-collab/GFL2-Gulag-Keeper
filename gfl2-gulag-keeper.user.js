@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         솦챈 굴라그 키퍼
 // @namespace    https://arca.live/
-// @version      0.4.3
+// @version      0.4.4
 // @description  Replace arca.live block/report block flows with a custom UI for one channel.
 // @match        https://arca.live/b/gilrsfrontline2exili*
 // @match        https://arca.live/reports/b/gilrsfrontline2exili/*
@@ -888,6 +888,9 @@
 
   function getCurrentAdminName() {
     const stored = localStorage.getItem(SUPABASE_ADMIN_KEY);
+    const navUsername = document.querySelector('span.username.d-none.d-sm-inline');
+    const navText = navUsername ? normalizeText(navUsername.textContent).replace(/[^A-Za-z0-9가-힣_#.-]/g, '') : '';
+    if (navText) return navText;
 
     const candidates = Array.from(document.querySelectorAll('a, span, button, div'))
       .map((el) => {
@@ -1258,7 +1261,7 @@
 
     const title = document.createElement('div');
     title.className = 'acbm-title';
-    title.textContent = '솦챈 굴라그 키퍼 v0.4.3';
+    title.textContent = '솦챈 굴라그 키퍼 v0.4.2';
 
     const status = document.createElement('div');
     status.className = 'acbm-row';
