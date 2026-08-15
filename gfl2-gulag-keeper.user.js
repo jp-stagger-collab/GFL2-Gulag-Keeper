@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         솦챈 굴라그 키퍼
 // @namespace    https://arca.live/
-// @version      0.4.4
+// @version      0.5
 // @description  Replace arca.live block/report block flows with a custom UI for one channel.
 // @match        https://arca.live/b/gilrsfrontline2exili*
 // @match        https://arca.live/reports/b/gilrsfrontline2exili/*
@@ -485,6 +485,59 @@
         display: flex;
         gap: 8px;
         margin: 10px 0;
+      }
+
+      #${MODAL_ID} .acbu-target-name {
+        font-weight: 700;
+      }
+
+      #${MODAL_ID} .acbu-target-name.acbu-urgent {
+        color: #ff526f;
+      }
+
+      #${MODAL_ID} .acbu-target-name.acbu-warning {
+        color: #ffd45c;
+      }
+
+      #${MODAL_ID} .acbu-item-actions,
+      #${MODAL_ID} .acbu-count-edit {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      #${MODAL_ID} .acbu-count-edit {
+        margin-top: 6px;
+      }
+
+      #${MODAL_ID} .acbu-count-edit input {
+        width: 96px;
+      }
+
+      #${MODAL_ID} .acbu-count-edit button {
+        margin-top: 0;
+      }
+
+      #${MODAL_ID} .acbu-flash {
+        margin-top: 6px;
+        font-size: 12px;
+        font-weight: 700;
+        animation: acbu-flash-fade 2.4s ease forwards;
+      }
+
+      #${MODAL_ID} .acbu-flash-success {
+        color: #64d98b;
+      }
+
+      #${MODAL_ID} .acbu-flash-error {
+        color: #ff667f;
+      }
+
+      @keyframes acbu-flash-fade {
+        0% { opacity: 0; }
+        15%, 75% { opacity: 1; }
+        100% { opacity: 0; }
       }
     `;
     document.documentElement.appendChild(style);
@@ -1158,7 +1211,13 @@
           for (const row of data) {
             const item = document.createElement('div');
             item.className = 'acbu-item';
-            addText(item, `대상: ${row.target_username || ''}`);
+            const target = addText(item, '대상: ');
+            const targetName = document.createElement('span');
+            targetName.className = 'acbu-target-name';
+            if (row.days_left <= 30) targetName.classList.add('acbu-urgent');
+            else if (row.days_left <= 90) targetName.classList.add('acbu-warning');
+            targetName.textContent = row.target_username || '';
+            target.appendChild(targetName);
             addText(item, `만료: [${row.days_left ?? ''}일] 남았습니다.`);
             addText(item, `사유: ${row.block_reason || ''}`);
             addLinkButton(item, '대상의 프로필', row.target_profile_url);
@@ -1189,8 +1248,8 @@
       const result = document.createElement('div');
       result.className = 'acbu-list';
 
-      button.addEventListener('click', () => {
-        result.textContent = '검색 중...';
+      const loadResults = () => {
+        result.textContent = '불러오는 중...';
         supabaseRpc('gfl2_search_user_blocks', {
           p_query: input.value.trim(),
         }).then((rows) => {
@@ -1205,18 +1264,113 @@
             const item = document.createElement('div');
             item.className = 'acbu-item';
             addText(item, `대상: ${row.target_username}`);
-            addText(item, `누적: ${row.block_count}회`);
-            addLinkButton(item, '대상의 프로필', row.target_profile_url);
+            const countText = addText(item, `누적: ${row.block_count}회`);
+            const actions = document.createElement('div');
+            actions.className = 'acbu-item-actions';
+            addLinkButton(actions, '대상의 프로필', row.target_profile_url);
+
+            const editButton = document.createElement('button');
+            editButton.type = 'button';
+            editButton.textContent = '누적 횟수 수정';
+            actions.appendChild(editButton);
+
+            let currentCount = Number(row.block_count);
+            let editor = null;
+            let flash = null;
+
+            const showFlash = (message, type) => {
+              if (flash) flash.remove();
+              flash = document.createElement('span');
+              flash.className = `acbu-flash acbu-flash-${type}`;
+              flash.textContent = `${type === 'success' ? '✓ ' : ''}${message}`;
+              actions.appendChild(flash);
+              flash.addEventListener('animationend', () => {
+                flash.remove();
+                flash = null;
+              }, { once: true });
+            };
+
+            const closeEditor = () => {
+              if (editor) editor.remove();
+              editor = null;
+              editButton.disabled = false;
+            };
+
+            editButton.addEventListener('click', () => {
+              if (editor) return;
+              if (flash) {
+                flash.remove();
+                flash = null;
+              }
+
+              editButton.disabled = true;
+              editor = document.createElement('div');
+              editor.className = 'acbu-count-edit';
+              const countInput = document.createElement('input');
+              countInput.type = 'number';
+              countInput.min = '0';
+              countInput.step = '1';
+              countInput.value = String(currentCount);
+              const save = document.createElement('button');
+              save.type = 'button';
+              save.textContent = '저장';
+              const cancel = document.createElement('button');
+              cancel.type = 'button';
+              cancel.textContent = '취소';
+
+              cancel.addEventListener('click', closeEditor);
+              save.addEventListener('click', () => {
+                const nextCount = Number(countInput.value);
+                if (!Number.isInteger(nextCount) || nextCount < 0) {
+                  showFlash('0 이상의 정수를 입력해주세요.', 'error');
+                  return;
+                }
+                if (nextCount === currentCount) {
+                  showFlash('기존 횟수와 동일하다.', 'error');
+                  return;
+                }
+
+                save.disabled = true;
+                cancel.disabled = true;
+                supabaseRpc('gfl2_update_block_count', {
+                  p_target_username: row.target_username,
+                  p_block_count: nextCount,
+                  p_admin_nickname: getCurrentAdminName() || null,
+                }).then((updatedCount) => {
+                  currentCount = Number(updatedCount);
+                  countText.textContent = `누적: ${currentCount}회`;
+                  closeEditor();
+                  showFlash('누적 횟수가 수정되었습니다.', 'success');
+                }).catch(() => {
+                  save.disabled = false;
+                  cancel.disabled = false;
+                  showFlash('수정에 실패했습니다.', 'error');
+                });
+              });
+
+              editor.append(countInput, save, cancel);
+              actions.appendChild(editor);
+              countInput.focus();
+              countInput.select();
+            });
+
+            item.appendChild(actions);
             result.appendChild(item);
           }
         }).catch((err) => {
           result.textContent = err.message || '검색 실패';
         });
+      };
+
+      button.addEventListener('click', loadResults);
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') loadResults();
       });
 
       search.append(input, button);
       body.append(search, result);
       input.focus();
+      loadResults();
     });
   }
 
@@ -1224,7 +1378,7 @@
     const session = getStoredSession();
     openManagerModal('관리 내역 보기', (body) => {
       const list = addText(body, '불러오는 중...', 'acbu-list');
-      supabaseRpc('gfl2_recent_actions')
+      supabaseRpc('gfl2_recent_actions_v2')
         .then((rows) => {
           list.textContent = '';
           const data = Array.isArray(rows) ? rows : [];
@@ -1236,8 +1390,12 @@
           for (const row of data) {
             const item = document.createElement('div');
             item.className = 'acbu-item';
-            addText(item, `행동: ${row.action_type === 'unblock' ? '차단 해제' : '차단'}`);
+            const actionLabel = row.action_type === 'unblock'
+              ? '차단 해제'
+              : row.action_type === 'count_edit' ? '차단 누적 수정' : '차단';
+            addText(item, `행동: ${actionLabel}`);
             addText(item, `대상: ${row.target_username || ''}`);
+            if (row.action_detail) addText(item, `변경: ${row.action_detail}`);
             addText(item, `처리자: ${row.admin_nickname || ''}`);
             addText(item, `기록일: ${formatDisplayTime(row.recorded_at)}`);
             list.appendChild(item);
@@ -1261,7 +1419,7 @@
 
     const title = document.createElement('div');
     title.className = 'acbm-title';
-    title.textContent = '솦챈 굴라그 키퍼 v0.4.4';
+    title.textContent = '솦챈 굴라그 키퍼 v0.5';
 
     const status = document.createElement('div');
     status.className = 'acbm-row';
