@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         솦챈 굴라그 키퍼
+// @name         솦챈 굴라그 키퍼 v0.6
 // @namespace    https://arca.live/
-// @version      0.5
+// @version      0.6
 // @description  Replace arca.live block/report block flows with a custom UI for one channel.
 // @match        https://arca.live/b/gilrsfrontline2exili*
 // @match        https://arca.live/reports/b/gilrsfrontline2exili/*
@@ -46,8 +46,8 @@
   if (!PAGE_MODE) return;
 
   const BOARD_PRESETS = [
-    ['6시간', '1*0.25'],
-    ['12시간', '1*0.5'],
+    ['6시간', '0.25'],
+    ['12시간', '0.5'],
     ['1일', '1'],
     ['3일', '3'],
     ['7일', '7'],
@@ -68,6 +68,148 @@
 
   const REPORT_IGNORED_ACTIONS = new Set(['사유아님', '처리완료']);
   const bypassReportActionButtons = new WeakSet();
+
+  const TAG_GROUPS = ['행동 유형', '계정 특성'];
+
+  function tagButton(text, action, className = '') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `acbt-button ${className}`;
+    button.textContent = text;
+    button.addEventListener('click', action);
+    return button;
+  }
+
+  function renderTagPicker(parent) {
+    const selected = new Set();
+    let catalog = [];
+    let managing = false;
+    let busy = false;
+    let ready = false;
+    const section = document.createElement('section');
+    section.className = 'acbt-picker';
+    const head = document.createElement('div');
+    head.className = 'acbt-heading';
+    addText(head, '분류 태그');
+    const counter = addText(head, '0개 선택', 'acbt-muted');
+    const manage = tagButton('태그 관리', () => {
+      managing = !managing;
+      manage.textContent = managing ? '관리 완료' : '태그 관리';
+      draw();
+    });
+    head.appendChild(manage);
+    const groups = document.createElement('div');
+    const creator = document.createElement('form');
+    creator.className = 'acbt-create';
+    creator.hidden = true;
+    const category = document.createElement('select');
+    category.setAttribute('aria-label', '태그 분류');
+    TAG_GROUPS.forEach((name) => category.add(new Option(name, name)));
+    const input = document.createElement('input');
+    input.placeholder = '새 태그 이름';
+    input.maxLength = 24;
+    input.setAttribute('aria-label', '새 태그 이름');
+    const create = tagButton('추가', () => creator.requestSubmit());
+    const cancel = tagButton('취소', () => { creator.hidden = true; });
+    creator.append(category, input, create, cancel);
+    const status = addText(section, '태그 불러오는 중...', 'acbt-status');
+    status.setAttribute('aria-live', 'polite');
+    section.prepend(head, groups, creator);
+    parent.appendChild(section);
+
+    async function removeTag(tag) {
+      if (busy) return;
+      busy = true;
+      status.textContent = '태그 숨기는 중...';
+      try {
+        await supabaseRpc('gfl2_archive_tag', { p_name: tag.name });
+        catalog = catalog.filter((entry) => entry.name !== tag.name);
+        selected.delete(tag.name);
+        status.textContent = '선택 목록에서 숨겼습니다. 기존 차단 기록에는 유지됩니다.';
+        draw();
+      } catch (err) {
+        status.textContent = `태그 삭제 실패: ${err.message}`;
+      } finally { busy = false; }
+    }
+
+    function draw() {
+      groups.replaceChildren();
+      counter.textContent = `${selected.size}개 선택`;
+      TAG_GROUPS.forEach((name) => {
+        const group = document.createElement('div');
+        group.className = 'acbt-group';
+        addText(group, name, 'acbt-muted');
+        const chips = document.createElement('div');
+        chips.className = 'acbt-chips';
+        catalog.filter((tag) => tag.category === name).forEach((tag) => {
+          const wrap = document.createElement('span');
+          wrap.className = 'acbt-chip-wrap';
+          const chip = tagButton(tag.name, () => {
+            if (selected.has(tag.name)) selected.delete(tag.name);
+            else selected.add(tag.name);
+            draw();
+          }, 'acbt-chip');
+          chip.setAttribute('aria-pressed', String(selected.has(tag.name)));
+          chip.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            managing = true;
+            manage.textContent = '관리 완료';
+            draw();
+          });
+          wrap.appendChild(chip);
+          if (managing) {
+            const remove = tagButton('×', () => removeTag(tag), 'acbt-remove');
+            remove.setAttribute('aria-label', `${tag.name} 태그 숨기기`);
+            remove.title = '선택 목록에서 숨기기';
+            wrap.appendChild(remove);
+          }
+          chips.appendChild(wrap);
+        });
+        const plus = tagButton('+', () => {
+          creator.hidden = false;
+          category.value = name;
+          input.focus();
+        }, 'acbt-chip acbt-add');
+        plus.setAttribute('aria-label', `${name} 태그 추가`);
+        chips.appendChild(plus);
+        group.appendChild(chips);
+        groups.appendChild(group);
+      });
+    }
+
+    creator.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const name = input.value.trim();
+      if (!name || busy) return;
+      busy = true;
+      create.disabled = true;
+      try {
+        await supabaseRpc('gfl2_save_tag', { p_name: name, p_category: category.value });
+        catalog = await supabaseRpc('gfl2_list_tags');
+        selected.add(name);
+        input.value = '';
+        creator.hidden = true;
+        status.textContent = '공유 태그를 추가했습니다.';
+        draw();
+      } catch (err) {
+        status.textContent = `태그 추가 실패: ${err.message}`;
+      } finally { create.disabled = false; busy = false; }
+    });
+
+    supabaseRpc('gfl2_list_tags').then((rows) => {
+      catalog = Array.isArray(rows) ? rows : [];
+      ready = true;
+      status.textContent = '';
+      draw();
+    }).catch(() => {
+      status.textContent = '태그 SQL 적용 및 관리자 로그인이 필요합니다.';
+    });
+    return () => {
+      if (!ready) throw new Error('태그를 불러오지 못했습니다. 태그 SQL 적용과 관리자 로그인을 확인해주세요.');
+      if (busy) throw new Error('태그 저장을 마친 뒤 다시 시도해주세요.');
+      return Array.from(selected);
+    };
+  }
 
   function normalizeText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
@@ -539,6 +681,163 @@
         15%, 75% { opacity: 1; }
         100% { opacity: 0; }
       }
+
+      #${MODAL_ID} .acbu-dialog { max-height: calc(100dvh - 24px); overflow-y: auto; }
+      #${MODAL_ID} .acbt-picker { margin: 16px 0; padding: 14px 0; border-block: 1px solid #ffffff18; }
+      #${MODAL_ID} .acbt-heading, #${MODAL_ID} .acbt-chips, #${MODAL_ID} .acbt-create,
+      #${MODAL_ID} .acbt-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+      #${MODAL_ID} .acbt-heading { margin-bottom: 12px; font-weight: 600; }
+      #${MODAL_ID} .acbt-heading .acbt-button { margin-left: auto; }
+      #${MODAL_ID} .acbt-muted, #${MODAL_ID} .acbt-status { color: #bfc2cc; font-size: 12px; }
+      #${MODAL_ID} .acbt-group + .acbt-group { margin-top: 12px; }
+      #${MODAL_ID} .acbt-chips { margin-top: 6px; }
+      #${MODAL_ID} .acbt-button { border: 1px solid #ffffff26; border-radius: 6px; background: #30333c;
+        color: #f2f3f7; font: inherit; padding: 6px 10px; margin: 0; cursor: pointer; }
+      #${MODAL_ID} .acbt-chip { border-radius: 18px; font-size: 12px; max-width: 100%; overflow-wrap: anywhere; }
+      #${MODAL_ID} .acbt-chip[aria-pressed="true"] { background: #f1f2f6; color: #202127; border-color: #f1f2f6; }
+      #${MODAL_ID} .acbt-chip-wrap { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; }
+      #${MODAL_ID} .acbt-remove { color: #ff92a5; }
+      #${MODAL_ID} .acbt-status { margin-top: 8px; overflow-wrap: anywhere; }
+      #${MODAL_ID} .acbt-status:empty { display: none; }
+      #${MODAL_ID} .acbt-create { margin-top: 12px; }
+      #${MODAL_ID} .acbt-create[hidden] { display: none; }
+      #${MODAL_ID} .acbt-create input { flex: 1 1 140px; width: 140px; min-width: 0; }
+      #${MODAL_ID} .acbt-create select, #${MODAL_ID} .acbt-match { background: #30333c; color: #f2f3f7;
+        border: 1px solid #ffffff26; border-radius: 6px; padding: 7px; font: inherit; }
+      #${MODAL_ID} .acbt-badge { display: inline-block; border-radius: 14px; padding: 3px 8px;
+        color: #ffd6df; background: #e83f5f20; font-size: 12px; margin: 8px 4px 0 0; overflow-wrap: anywhere; }
+      #${MODAL_ID} .acbt-filters { padding: 10px 0; border-bottom: 1px solid #ffffff18; }
+      #${MODAL_ID} .acbt-summary { margin-top: 8px; color: #bfc2cc; font-size: 12px; }
+    `;
+    style.textContent += `
+      #${MODAL_ID}, #${MANAGER_ID} {
+        --ac-surface: rgba(26, 28, 32, .75);
+        --ac-field: #17191d;
+        --ac-hover: #30343a;
+        --ac-line: #ffffff14;
+        --ac-muted: #a6adb7;
+        --ac-text: #eef1f4;
+        --ac-accent: #91dfc3;
+        --ac-danger: #ef5878;
+        font-size: 13px; line-height: 1.5; letter-spacing: 0;
+        -webkit-font-smoothing: antialiased; color-scheme: dark;
+      }
+      #${MODAL_ID} *, #${MANAGER_ID} * { box-sizing: border-box; }
+      #${MODAL_ID} { padding: 12px; background: #080a0db3; backdrop-filter: blur(5px); }
+      #${MODAL_ID} .acbu-dialog {
+        display: flex; flex-direction: column; width: min(510px, 100%);
+        max-height: calc(100dvh - 24px); overflow: hidden;
+        background: var(--ac-surface); backdrop-filter: blur(24px);
+        border: 1px solid #ffffff1f; border-radius: 8px;
+        box-shadow: 0 24px 90px #0008; animation: acbu-enter 160ms ease-out;
+      }
+      #${MODAL_ID} .acbu-wide { width: min(780px, 100%); }
+      #${MODAL_ID} .acbu-head { padding: 18px 22px; flex: none; border-color: var(--ac-line); }
+      #${MODAL_ID} .acbu-title { font-size: 16px; font-weight: 650; line-height: 1.4; }
+      #${MODAL_ID} .acbu-close {
+        width: 30px; height: 30px; flex: none; display: grid; place-items: center;
+        border-radius: 6px; color: var(--ac-muted); font-size: 24px;
+      }
+      #${MODAL_ID} .acbu-close:hover { background: var(--ac-hover); color: var(--ac-text); }
+      #${MODAL_ID} .acbu-body { padding: 20px 22px; overflow-y: auto; min-height: 0; }
+      #${MODAL_ID} .acbu-target { color: var(--ac-text); font-size: 13px; font-weight: 500; }
+      #${MODAL_ID} .acbu-url { color: var(--ac-muted); font-size: 12px; margin-bottom: 20px; overflow-wrap: anywhere; }
+      #${MODAL_ID} label { font-size: 12px; color: #cbd0d8; margin: 16px 0 8px; font-weight: 500; }
+      #${MODAL_ID} input, #${MODAL_ID} textarea, #${MODAL_ID} select {
+        color: var(--ac-text); background: var(--ac-field); border: 1px solid #ffffff1f;
+        border-radius: 6px; padding: 10px 12px; font: inherit; min-width: 0;
+        transition: border-color 140ms, background 140ms;
+      }
+      #${MODAL_ID} input::placeholder, #${MODAL_ID} textarea::placeholder { color: #7f8793; opacity: 1; }
+      #${MODAL_ID} input:focus, #${MODAL_ID} textarea:focus, #${MODAL_ID} select:focus {
+        border-color: var(--ac-accent); box-shadow: 0 0 0 3px #91dfc314;
+      }
+      #${MODAL_ID} button:focus-visible, #${MANAGER_ID} button:focus-visible { outline: 2px solid var(--ac-accent); outline-offset: 3px; }
+      #${MODAL_ID} button { transition: background 140ms, color 140ms, border-color 140ms; }
+      #${MODAL_ID} button:disabled { opacity: .45; cursor: default; }
+      #${MODAL_ID} textarea { min-height: 92px; }
+      #${MODAL_ID} .acbu-presets { gap: 5px; margin: 9px 0 6px; }
+      #${MODAL_ID} .acbu-preset {
+        min-height: 30px; padding: 5px 9px; border: 1px solid var(--ac-line);
+        color: #bfc6d0; background: transparent; border-radius: 5px; font-weight: 500;
+      }
+      #${MODAL_ID} .acbu-preset:hover { color: var(--ac-text); background: var(--ac-hover); }
+      #${MODAL_ID} .acbu-preset[aria-pressed="true"] { color: var(--ac-accent); border-color: #91dfc34d; background: #91dfc310; }
+      #${MODAL_ID} .acbu-help, #${MODAL_ID} .acbu-count { color: var(--ac-muted); font-size: 12px; }
+      #${MODAL_ID} .acbu-help { margin-top: 8px; }
+      #${MODAL_ID} .acbu-error:empty { display: none; }
+      #${MODAL_ID} .acbu-actions { flex: none; padding: 16px 22px; border-color: var(--ac-line); gap: 8px; }
+      #${MODAL_ID} .acbu-button { min-height: 38px; min-width: 76px; font-size: 13px; border-radius: 6px; }
+      #${MODAL_ID} .acbu-cancel { background: transparent; border: 1px solid #ffffff26; color: #cbd0d8; }
+      #${MODAL_ID} .acbu-cancel:hover { background: var(--ac-hover); }
+      #${MODAL_ID} .acbu-submit { background: var(--ac-danger); color: #fff; font-weight: 600; }
+      #${MODAL_ID} .acbu-submit:hover:not(:disabled) { background: #f66c89; }
+      #${MODAL_ID} .acbt-picker { margin: 20px 0 4px; padding: 18px 0; border-color: var(--ac-line); }
+      #${MODAL_ID} .acbt-heading { font-size: 13px; font-weight: 600; gap: 8px; }
+      #${MODAL_ID} .acbt-muted, #${MODAL_ID} .acbt-status, #${MODAL_ID} .acbt-summary { color: var(--ac-muted); }
+      #${MODAL_ID} .acbt-button { min-height: 30px; padding: 5px 10px; background: transparent; border-color: #ffffff20; color: #bfc6d0; font-size: 12px; }
+      #${MODAL_ID} .acbt-button:hover { background: var(--ac-hover); color: var(--ac-text); }
+      #${MODAL_ID} .acbt-heading .acbt-button { border-color: transparent; padding-inline: 4px; }
+      #${MODAL_ID} .acbt-chip[aria-pressed="true"] { background: #91dfc31a; border-color: #91dfc359; color: var(--ac-accent); }
+      #${MODAL_ID} .acbt-add { width: 30px; padding: 0; border-style: dashed; font-size: 18px; }
+      #${MODAL_ID} .acbt-remove { border: 0; color: #ff99ad; }
+      #${MODAL_ID} .acbt-badge { background: #91dfc312; color: #aadfcd; border-radius: 4px; font-size: 11px; padding: 3px 7px; }
+      #${MODAL_ID} .acbt-create { gap: 6px; }
+      #${MODAL_ID} .acbt-filters { border-color: var(--ac-line); padding: 0 0 16px; gap: 6px; }
+      #${MODAL_ID} .acbt-match { margin-left: auto; font-size: 12px; padding: 6px 9px; }
+      #${MODAL_ID} .acbu-list { max-height: 50dvh; padding: 0; scrollbar-gutter: stable; }
+      #${MODAL_ID} .acbu-item {
+        border: 0; border-bottom: 1px solid var(--ac-line); border-radius: 0;
+        margin: 0; padding: 18px 4px; line-height: 1.8; overflow-wrap: anywhere; color: #bac1cc;
+      }
+      #${MODAL_ID} .acbu-item:last-child { border-bottom: 0; }
+      #${MODAL_ID} .acbu-item > div:first-child { color: var(--ac-text); font-weight: 600; margin-bottom: 4px; }
+      #${MODAL_ID} .acbu-item button, #${MODAL_ID} .acbu-search button {
+        border: 1px solid #ffffff20; border-radius: 5px; background: transparent;
+        color: #d2d8e1; font-size: 12px; font-weight: 500; min-height: 32px; padding: 5px 10px;
+      }
+      #${MODAL_ID} .acbu-item button:hover, #${MODAL_ID} .acbu-search button:hover { background: var(--ac-hover); }
+      #${MODAL_ID} .acbu-search { margin: 0 0 14px; align-items: center; }
+      #${MODAL_ID} .acbu-search input { flex: 1; width: 0; min-width: 0; }
+      #${MODAL_ID} .acbu-search button { margin: 0; flex: none; white-space: nowrap; min-height: 40px; }
+      #${MODAL_ID} .acbu-count-edit { gap: 6px; }
+      #${MODAL_ID} .acbu-count-edit input { width: 76px; padding: 7px 9px; }
+      #${MODAL_ID} .acbu-flash { font-weight: 500; }
+      #${MANAGER_ID} {
+        left: 12px; bottom: 12px; width: 232px; max-width: calc(100vw - 24px);
+        border: 1px solid #ffffff1f; background: var(--ac-surface); backdrop-filter: blur(24px);
+        box-shadow: 0 12px 40px #0005; border-radius: 8px;
+      }
+      #${MANAGER_ID}.collapsed { width: 232px; }
+      #${MANAGER_ID} .acbm-body { padding: 16px 12px 8px; max-height: 400px; }
+      #${MANAGER_ID} .acbm-title { font-size: 14px; font-weight: 650; padding: 0 4px; margin-bottom: 12px; line-height: 1.6; }
+      #${MANAGER_ID} .acbm-version { display: block; color: var(--ac-muted); font-size: 11px; font-weight: 400; }
+      #${MANAGER_ID} .acbm-row { border: 0; padding: 0; margin: 3px 0; }
+      #${MANAGER_ID} .acbm-row:empty { display: none; }
+      #${MANAGER_ID} .acbm-row:has(.acbm-count) { display: flex; align-items: center; border-radius: 6px; background: #ef58780d; }
+      #${MANAGER_ID} .acbm-row button { display: block; text-align: left; width: 100%; padding: 10px; border-radius: 6px; font-weight: 500; font-size: 12px; }
+      #${MANAGER_ID} .acbm-row button:hover { background: #ffffff0a; }
+      #${MANAGER_ID} .acbm-count { float: none; flex: none; min-width: 24px; margin-right: 10px;
+        padding: 1px 6px; font-size: 11px; font-weight: 600; background: #ef587826; color: #ff9eb3; }
+      #${MANAGER_ID} .acbm-footer { display: flex; align-items: center; gap: 7px;
+        border-color: var(--ac-line); padding: 12px 4px 4px; margin-top: 10px; color: var(--ac-muted); font-size: 11px; overflow-wrap: anywhere; }
+      #${MANAGER_ID} .acbm-footer.acbm-connected::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ac-accent); }
+      #${MANAGER_ID} .acbm-toggle { height: 30px; border-color: var(--ac-line); color: var(--ac-muted); font-size: 21px; }
+      #${MANAGER_ID} .acbm-toggle:hover { background: #ffffff08; }
+      #${MANAGER_ID} .acbm-login input { background: var(--ac-field); border-color: #ffffff26; padding: 9px; font: inherit; }
+      #${MANAGER_ID} .acbm-login button { color: var(--ac-accent); }
+      #${MODAL_ID} ::-webkit-scrollbar { width: 5px; }
+      #${MODAL_ID} ::-webkit-scrollbar-thumb { background: #ffffff26; border-radius: 5px; }
+      @keyframes acbu-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+      @media (max-width: 480px) {
+        #${MODAL_ID} .acbu-head, #${MODAL_ID} .acbu-actions { padding: 15px 16px; }
+        #${MODAL_ID} .acbu-body { padding: 16px; }
+        #${MODAL_ID} input, #${MODAL_ID} textarea { font-size: 16px; }
+        #${MODAL_ID} .acbt-match { margin-left: 0; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #${MODAL_ID} *, #${MANAGER_ID}, #${MANAGER_ID} * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+      }
     `;
     document.documentElement.appendChild(style);
   }
@@ -775,8 +1074,13 @@
     durationInput.type = 'text';
     durationInput.value = defaultDuration;
     durationInput.placeholder = context.durationPlaceholder || '예: 7, 30, 1*0.5';
+    const refreshPresets = () => {
+      presets.querySelectorAll('button').forEach((button) => {
+        button.setAttribute('aria-pressed', String(parseDayExpression(button.dataset.days) === parseDayExpression(durationInput.value)));
+      });
+    };
     let refreshReasonPlaceholder = () => {};
-    durationInput.addEventListener('input', () => refreshReasonPlaceholder());
+    durationInput.addEventListener('input', () => { refreshReasonPlaceholder(); refreshPresets(); });
 
     const presets = document.createElement('div');
     presets.className = 'acbu-presets';
@@ -785,17 +1089,20 @@
       button.type = 'button';
       button.className = 'acbu-preset';
       button.textContent = label;
+      button.dataset.days = value;
       button.addEventListener('click', () => {
         durationInput.value = value;
+        refreshPresets();
         refreshReasonPlaceholder();
         durationInput.focus();
       });
       presets.appendChild(button);
     }
+    refreshPresets();
 
     const help = document.createElement('div');
     help.className = 'acbu-help';
-    help.textContent = context.helpText || '일 단위로 입력합니다. 예시) 12시간은 [1*0.5]';
+    help.textContent = context.helpText || '일 단위로 입력합니다. 예시) 6시간은 0.25, 12시간은 0.5';
 
     const reasonRow = document.createElement('div');
     reasonRow.className = 'acbu-row';
@@ -830,6 +1137,9 @@
 
     const headerFields = context.targetUrl ? [target, targetUrl] : [target];
     body.append(...headerFields, durationLabel, durationInput, presets, help, reasonRow, reasonInput, error);
+    const tagFields = document.createElement('div');
+    body.insertBefore(tagFields, reasonRow);
+    const getSelectedTags = renderTagPicker(tagFields);
 
     const actions = document.createElement('div');
     actions.className = 'acbu-actions';
@@ -848,6 +1158,7 @@
     submit.addEventListener('click', async () => {
       const duration = durationInput.value.trim();
       const reason = reasonInput.value.trim();
+      let nativeDuration = duration;
 
       if (!duration) {
         error.textContent = '차단 기간을 입력해주세요.';
@@ -862,6 +1173,16 @@
           durationInput.focus();
           return;
         }
+      }
+
+      if (!context.onSubmit) {
+        const parsedDuration = parseDayExpression(duration);
+        if (!Number.isFinite(parsedDuration) || parsedDuration <= 0 || parsedDuration > 365) {
+          error.textContent = '차단 기간은 0보다 크고 365 이하인 일 단위 값으로 입력해주세요.';
+          durationInput.focus();
+          return;
+        }
+        nativeDuration = String(parsedDuration);
       }
 
       if (reason.length > 128) {
@@ -882,12 +1203,12 @@
           return;
         }
 
-        recordBlockLog(context, duration, recordReason);
+        await recordBlockLog(context, duration, recordReason, getSelectedTags());
 
         if (context.onSubmit) {
           await context.onSubmit({ duration, reason });
         } else {
-          withPromptAnswers(duration, reason, () => {
+          withPromptAnswers(nativeDuration, reason, () => {
             chooseDirectInput(context.select);
             context.sourceButton.click();
           });
@@ -941,29 +1262,11 @@
 
   function getCurrentAdminName() {
     const stored = localStorage.getItem(SUPABASE_ADMIN_KEY);
-    const navUsername = document.querySelector('span.username.d-none.d-sm-inline');
+    const navUsername = document.querySelector(
+      'a.user-menu-link.loggedin > span.username.d-none.d-sm-inline'
+    );
     const navText = navUsername ? normalizeText(navUsername.textContent).replace(/[^A-Za-z0-9가-힣_#.-]/g, '') : '';
-    if (navText) return navText;
-
-    const candidates = Array.from(document.querySelectorAll('a, span, button, div'))
-      .map((el) => {
-        const rect = el.getBoundingClientRect();
-        const text = normalizeText(el.textContent).replace(/[^A-Za-z0-9가-힣_#.-]/g, '');
-        return { rect, text };
-      })
-      .filter(({ rect, text }) => {
-        if (!text || text.length < 2 || text.length > 20) return false;
-        if (rect.top > 58 || rect.right < window.innerWidth * 0.68) return false;
-        if (/알림|구독|찾기|채널|로그인|설정/.test(text)) return false;
-        return /^[A-Za-z0-9가-힣_#.-]+$/.test(text);
-      })
-      .sort((a, b) => {
-        const areaA = Math.max(1, a.rect.width * a.rect.height);
-        const areaB = Math.max(1, b.rect.width * b.rect.height);
-        return areaA - areaB || b.rect.right - a.rect.right;
-      });
-
-    return candidates[0]?.text || stored || 'unknown';
+    return navText || stored || 'unknown';
   }
 
   async function refreshSupabaseSession(session) {
@@ -1064,7 +1367,7 @@
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  function recordBlockLog(context, duration, reason) {
+  async function recordBlockLog(context, duration, reason, tags = []) {
     const session = getStoredSession();
     if (!session || !session.access_token || !isSupabaseConfigured()) return;
 
@@ -1072,7 +1375,7 @@
     if (!durationDays) return;
     const adminName = getCurrentAdminName();
 
-    void supabaseRpc('gfl2_record_block', {
+    await supabaseRpc('gfl2_record_block_tagged', {
       p_target_username: context.targetLabel || '',
       p_profile_url: context.targetProfileUrl || null,
       p_post_url: context.targetUrl || location.href,
@@ -1080,7 +1383,8 @@
       p_reason: reason || '',
       p_source: PAGE_MODE,
       p_admin_nickname: adminName || null,
-    }, true).catch(() => {});
+      p_tags: tags,
+    }, true);
   }
 
   async function findActiveBlock(context) {
@@ -1377,8 +1681,13 @@
   function openActionHistory() {
     const session = getStoredSession();
     openManagerModal('관리 내역 보기', (body) => {
+      const filters = document.createElement('div');
+      filters.className = 'acbt-filters';
+      const summary = addText(body, '', 'acbt-summary');
+      summary.setAttribute('aria-live', 'polite');
+      body.prepend(filters);
       const list = addText(body, '불러오는 중...', 'acbu-list');
-      supabaseRpc('gfl2_recent_actions_v2')
+      supabaseRpc('gfl2_recent_actions_tagged')
         .then((rows) => {
           list.textContent = '';
           const data = Array.isArray(rows) ? rows : [];
@@ -1387,7 +1696,26 @@
             return;
           }
 
-          for (const row of data) {
+          const selected = new Set();
+          const match = document.createElement('select');
+          match.className = 'acbt-match';
+          match.setAttribute('aria-label', '태그 일치 조건');
+          match.add(new Option('하나 이상 포함', 'any'));
+          match.add(new Option('모두 포함', 'all'));
+          const renderRows = () => {
+            list.replaceChildren();
+            const visible = data.filter((row) => {
+              const tags = row.tags || [];
+              return !selected.size || (match.value === 'all'
+                ? Array.from(selected).every((tag) => tags.includes(tag))
+                : Array.from(selected).some((tag) => tags.includes(tag)));
+            });
+            summary.textContent = `최근 ${data.length}건 중 ${visible.length}건`;
+            if (!visible.length) list.textContent = '일치하는 내역이 없습니다.';
+            filters.querySelectorAll('[data-filter]').forEach((button) => {
+              button.setAttribute('aria-pressed', String(button.dataset.filter === '' ? !selected.size : selected.has(button.dataset.filter)));
+            });
+          for (const row of visible) {
             const item = document.createElement('div');
             item.className = 'acbu-item';
             const actionLabel = row.action_type === 'unblock'
@@ -1398,8 +1726,27 @@
             if (row.action_detail) addText(item, `변경: ${row.action_detail}`);
             addText(item, `처리자: ${row.admin_nickname || ''}`);
             addText(item, `기록일: ${formatDisplayTime(row.recorded_at)}`);
+            const badges = document.createElement('div');
+            (row.tags || []).forEach((tag) => addText(badges, tag, 'acbt-badge'));
+            item.appendChild(badges);
             list.appendChild(item);
           }
+          };
+          const all = tagButton('전체', () => { selected.clear(); renderRows(); }, 'acbt-chip');
+          all.dataset.filter = '';
+          filters.appendChild(all);
+          Array.from(new Set(data.flatMap((row) => row.tags || []))).sort().forEach((tag) => {
+            const button = tagButton(tag, () => {
+              if (selected.has(tag)) selected.delete(tag);
+              else selected.add(tag);
+              renderRows();
+            }, 'acbt-chip');
+            button.dataset.filter = tag;
+            filters.appendChild(button);
+          });
+          filters.appendChild(match);
+          match.addEventListener('change', renderRows);
+          renderRows();
         })
         .catch((err) => {
           list.textContent = err.message || '조회 실패';
@@ -1419,7 +1766,8 @@
 
     const title = document.createElement('div');
     title.className = 'acbm-title';
-    title.textContent = '솦챈 굴라그 키퍼 v0.5';
+    title.textContent = '솦챈 굴라그 키퍼';
+    addText(title, 'v0.6 * UI | 시간제 차단 개선판', 'acbm-version');
 
     const status = document.createElement('div');
     status.className = 'acbm-row';
@@ -1438,7 +1786,7 @@
     rowSearch.className = 'acbm-row';
     const searchButton = document.createElement('button');
     searchButton.type = 'button';
-    searchButton.textContent = '차단 누적 검색 🔍';
+    searchButton.textContent = '차단 누적 검색';
     rowSearch.appendChild(searchButton);
 
     const rowHistory = document.createElement('div');
@@ -1457,6 +1805,9 @@
     const isCollapsed = localStorage.getItem(MANAGER_COLLAPSED_KEY) === '1';
     panel.classList.toggle('collapsed', isCollapsed);
     toggle.textContent = isCollapsed ? '⌃' : '⌄';
+    toggle.setAttribute('aria-label', '관리 패널 접기 / 펼치기');
+    toggle.setAttribute('aria-expanded', String(!isCollapsed));
+    body.inert = isCollapsed;
 
     function refreshCount() {
       const session = getStoredSession();
@@ -1475,6 +1826,7 @@
       const nextSession = { ...session, admin_nickname: adminName };
       setStoredSession(nextSession);
       footer.textContent = `처리자: ${adminName}`;
+      footer.classList.add('acbm-connected');
       if (isSupabaseConfigured()) {
         void supabaseRpc('gfl2_set_admin_nickname', { p_admin_nickname: adminName }).catch(() => {});
       }
@@ -1530,6 +1882,8 @@
       const collapsed = panel.classList.contains('collapsed');
       localStorage.setItem(MANAGER_COLLAPSED_KEY, collapsed ? '1' : '0');
       toggle.textContent = collapsed ? '⌃' : '⌄';
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      body.inert = collapsed;
     });
 
     body.append(title, status, rowExpiring, rowSearch, rowHistory, footer);
