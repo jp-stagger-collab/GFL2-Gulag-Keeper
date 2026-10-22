@@ -1469,6 +1469,71 @@
     return div;
   }
 
+  function addTagBadges(parent, tags = []) {
+    const badges = document.createElement('div');
+    tags.forEach((tag) => addText(badges, tag, 'acbt-badge'));
+    parent.appendChild(badges);
+  }
+
+  function createListTagFilter(parent, list) {
+    const selected = new Set();
+    let rows = [];
+    const filters = document.createElement('div');
+    filters.className = 'acbt-filters';
+    const summary = document.createElement('div');
+    summary.className = 'acbt-summary';
+    summary.setAttribute('aria-live', 'polite');
+    parent.insertBefore(filters, list);
+    parent.insertBefore(summary, list);
+    const match = document.createElement('select');
+    match.className = 'acbt-match';
+    match.setAttribute('aria-label', '태그 일치 조건');
+    match.add(new Option('하나 이상 포함', 'any'));
+    match.add(new Option('모두 포함', 'all'));
+
+    const apply = () => {
+      let visible = 0;
+      Array.from(list.children).forEach((item, index) => {
+        const tags = rows[index]?.tags || [];
+        item.hidden = selected.size > 0 && !(match.value === 'all'
+          ? Array.from(selected).every((tag) => tags.includes(tag))
+          : Array.from(selected).some((tag) => tags.includes(tag)));
+        if (!item.hidden) visible += 1;
+      });
+      summary.textContent = `${rows.length}명 중 ${visible}명${rows.length && !visible ? ' · 일치하는 대상이 없습니다.' : ''}`;
+      filters.querySelectorAll('[data-filter]').forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.filter === '' ? !selected.size : selected.has(button.dataset.filter)));
+      });
+    };
+    match.addEventListener('change', apply);
+
+    return {
+      update(data) {
+        rows = data;
+        match.disabled = false;
+        filters.replaceChildren();
+        const all = tagButton('전체', () => { selected.clear(); apply(); }, 'acbt-chip');
+        all.dataset.filter = '';
+        filters.appendChild(all);
+        Array.from(new Set([...selected, ...rows.flatMap((row) => row.tags || [])])).sort().forEach((tag) => {
+          const button = tagButton(tag, () => {
+            if (selected.has(tag)) selected.delete(tag);
+            else selected.add(tag);
+            apply();
+          }, 'acbt-chip');
+          button.dataset.filter = tag;
+          filters.appendChild(button);
+        });
+        filters.appendChild(match);
+        apply();
+      },
+      loading() {
+        filters.querySelectorAll('button, select').forEach((control) => { control.disabled = true; });
+        summary.textContent = '';
+      },
+    };
+  }
+
   function addLinkButton(parent, text, url) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -1502,12 +1567,14 @@
     const session = getStoredSession();
     openManagerModal('갱차 갱신 필요 | 확인', (body) => {
       const list = addText(body, '불러오는 중...', 'acbu-list');
+      const tagFilter = createListTagFilter(body, list);
 
-      supabaseRpc('gfl2_expiring_blocks')
+      supabaseRpc('gfl2_expiring_blocks_tagged')
         .then((rows) => {
           list.textContent = '';
           const data = Array.isArray(rows) ? rows : [];
           if (!data.length) {
+            tagFilter.update([]);
             list.textContent = '표시할 대상이 없습니다.';
             return;
           }
@@ -1524,10 +1591,12 @@
             target.appendChild(targetName);
             addText(item, `만료: [${row.days_left ?? ''}일] 남았습니다.`);
             addText(item, `사유: ${row.block_reason || ''}`);
+            addTagBadges(item, row.tags);
             addLinkButton(item, '대상의 프로필', row.target_profile_url);
             addLinkButton(item, '차단된 게시글', row.blocked_post_url);
             list.appendChild(item);
           }
+          tagFilter.update(data);
         })
         .catch((err) => {
           list.textContent = err.message || '조회 실패';
@@ -1551,15 +1620,23 @@
 
       const result = document.createElement('div');
       result.className = 'acbu-list';
+      search.append(input, button);
+      body.append(search, result);
+      const tagFilter = createListTagFilter(body, result);
+      let requestId = 0;
 
       const loadResults = () => {
+        const currentRequest = ++requestId;
         result.textContent = '불러오는 중...';
-        supabaseRpc('gfl2_search_user_blocks', {
+        tagFilter.loading();
+        supabaseRpc('gfl2_search_user_blocks_tagged', {
           p_query: input.value.trim(),
         }).then((rows) => {
+          if (currentRequest !== requestId) return;
           result.textContent = '';
           const data = Array.isArray(rows) ? rows : [];
           if (!data.length) {
+            tagFilter.update([]);
             result.textContent = '검색 결과가 없습니다.';
             return;
           }
@@ -1569,6 +1646,7 @@
             item.className = 'acbu-item';
             addText(item, `대상: ${row.target_username}`);
             const countText = addText(item, `누적: ${row.block_count}회`);
+            addTagBadges(item, row.tags);
             const actions = document.createElement('div');
             actions.className = 'acbu-item-actions';
             addLinkButton(actions, '대상의 프로필', row.target_profile_url);
@@ -1661,7 +1739,9 @@
             item.appendChild(actions);
             result.appendChild(item);
           }
+          tagFilter.update(data);
         }).catch((err) => {
+          if (currentRequest !== requestId) return;
           result.textContent = err.message || '검색 실패';
         });
       };
@@ -1671,8 +1751,6 @@
         if (event.key === 'Enter') loadResults();
       });
 
-      search.append(input, button);
-      body.append(search, result);
       input.focus();
       loadResults();
     });
@@ -1767,7 +1845,7 @@
     const title = document.createElement('div');
     title.className = 'acbm-title';
     title.textContent = '솦챈 굴라그 키퍼';
-    addText(title, 'v0.6 * UI | 시간제 차단 개선판', 'acbm-version');
+    addText(title, 'v0.5 · 태그 실험판', 'acbm-version');
 
     const status = document.createElement('div');
     status.className = 'acbm-row';
@@ -2427,3 +2505,4 @@
   });
   initManagerPanel();
 })();
+
